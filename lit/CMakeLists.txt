@@ -105,6 +105,18 @@ else()
     set(MIM_CUDA_CAN_RUN_ON_DEVICE False)
 endif()
 
+# pCUDA support: available iff the pCUDA plugins are built (see the AdaptiveCpp discovery in the
+# top-level CMakeLists.txt). Tests gate on this via `// REQUIRES: pcuda` and link the emitted host
+# module against the runtime via the `%acpp_link` substitution. Unlike CUDA no device probing is
+# needed — AdaptiveCpp's JIT falls back to the CPU (OpenMP backend) when no GPU is present.
+set(MIM_ACPP_LIB_DIR "")
+if(AdaptiveCpp_FOUND)
+    get_target_property(MIM_ACPP_RT_LIB AdaptiveCpp::acpp-rt LOCATION)
+    if(MIM_ACPP_RT_LIB)
+        get_filename_component(MIM_ACPP_LIB_DIR "${MIM_ACPP_RT_LIB}" DIRECTORY)
+    endif()
+endif()
+
 configure_file(lit.site.cfg.py.in lit.site.cfg.py @ONLY)
 configure_file("${PROJECT_SOURCE_DIR}/cmake/stage-lit-tests.cmake.in" "${CMAKE_CURRENT_BINARY_DIR}/stage-lit-tests.cmake" @ONLY)
 

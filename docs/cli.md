@@ -48,6 +48,10 @@ The syntax is `-X <plugin>:<arg>`:
 | [ll_nvptx](@ref ll_nvptx) | `sm=<SM>`                               | If embedding device binary, compile the device binary for compute capability sm\_`<SM>`.                                                                                                       |
 | [ll_nvptx](@ref ll_nvptx) | `libdevice=<path>`                      | If embedding device binary and if linking libdevice, link against the libdevice NVVM library at `<path>` instead of trying to find it via CUDA paths.                                          |
 | [ll_nvptx](@ref ll_nvptx) | `X<tool>=<args>`                        | If embedding device binary invoke `<tool>` with `<args>`.                                                                                                                                      |
+| [ll_pcuda](@ref ll_pcuda) | `o=<file>` <br> `output=<file>`         | Write the (host) LLVM IR to `<file>` instead of the default `<world>.ll`/`a.ll`.                                                                                                               |
+| [ll_pcuda](@ref ll_pcuda) | `o-dev=<file>` <br> `output-dev=<file>` | Write the device LLVM IR to `<file>` instead of the default `<world>_dev.ll`/`a_dev.ll`.                                                                                                       |
+| [ll_pcuda](@ref ll_pcuda) | `rt=embed` <br> `rt=extern`             | Like `ll`'s `rt`, but for the host module's C [runtime wrappers](@ref plugin_runtime) (e.g. `@mim_pcuda_check`): `embed` (default) splices their LLVM IR in; `extern` only `declare`s them.    |
+| [ll_pcuda](@ref ll_pcuda) | `no-embed`                              | Don't embed the HCF device image into the host LLVM IR (embedding is the default; it only needs `llvm-as`).                                                                                    |
 
 ## Debugging Features {#clidebug}
 

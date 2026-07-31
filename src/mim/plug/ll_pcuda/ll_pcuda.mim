@@ -1,0 +1,39 @@
+/// # The ll_pcuda Plugin {#ll_pcuda}
+///
+/// @see mim::plug::ll_pcuda
+///
+/// An LLVM backend that targets [AdaptiveCpp](https://github.com/AdaptiveCpp/AdaptiveCpp)'s pCUDA runtime.
+/// Loading this plugin (`mim foo.mim -p ll_pcuda`) appends an emission phase to the compilation pipeline that splits the fully lowered program into a host world and a device world.
+/// It writes the host LLVM IR to `<world>.ll` and the device LLVM IR (with generic SSCP builtins) to `<world>_dev.ll`.
+/// By default the device IR is assembled to bitcode, packaged into AdaptiveCpp's Heterogeneous Container Format (HCF), and embedded into the host LLVM IR; a global constructor registers the HCF image with the pCUDA runtime, which JIT-compiles it for whatever device is present (NVIDIA/AMD GPUs, or the CPU via OpenMP).
+/// Link the emitted host module against `libacpp-rt.so`, e.g. `clang++ <world>.ll -L<acpp-libdir> -lacpp-rt -Wl,-rpath,<acpp-libdir>`.
+/// The output paths and the embedding behavior can be overridden via `-X ll_pcuda:<arg>`; see @ref ll_pcuda_cli_args.
+///
+/// [TOC]
+///
+/// ## Dependencies
+///
+plugin gpu;
+plugin pcuda;
+plugin opt;
+import compile;
+///
+/// ## Command-Line Arguments {#ll_pcuda_cli_args}
+///
+/// This plugin reads the following [plugin arguments](@ref clipluginargs) (`-X ll_pcuda:<arg>`):
+///
+/// | Argument            | Effect                                                                                                                                              |
+/// |---------------------|---------------------------------------------------------------------------------------------------------------------------------------------------|
+/// | `o=<file>` <br> `output=<file>`         | Write the (host) LLVM IR to `<file>` instead of the default `<world>.ll`/`a.ll`.                                               |
+/// | `o-dev=<file>` <br> `output-dev=<file>` | Write the device LLVM IR to `<file>` instead of the default `<world>_dev.ll`/`a_dev.ll`.                                       |
+/// | `rt=embed` <br> `rt=extern`             | How the C [runtime wrappers](@ref plugin_runtime) (e.g. `@mim_pcuda_check`) reach the host module: `embed` (default) splices their LLVM IR in; `extern` only `declare`s them. |
+/// | `no-embed`          | Don't embed the HCF device image into the host LLVM IR (embedding is the default; it only needs `llvm-as`).                                        |
+///
+/// ## Phases
+///
+/// ### %%ll_pcuda.emit
+///
+/// Emits the LLVM IR with SSCP builtins for the host and device worlds split from the current world.
+/// This phase is spliced into the default pipeline (see `opt`) whenever the `ll_pcuda` plugin is loaded.
+///
+axm %ll_pcuda.emit: %compile.Phase;

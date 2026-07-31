@@ -52,6 +52,18 @@ cmake_dependent_option(
     "CMAKE_BUILD_TYPE STREQUAL Debug" OFF
 )
 
+option(MIM_WITH_ADAPTIVECPP "If ON, look for AdaptiveCpp and build the pCUDA plugins (pcuda, ll_pcuda) against it." ON)
+if(MIM_WITH_ADAPTIVECPP)
+    # Hint the search with AdaptiveCpp_DIR or CMAKE_PREFIX_PATH; an in-tree
+    # AdaptiveCpp checkout installed to AdaptiveCpp/build/install is found automatically.
+    find_package(AdaptiveCpp CONFIG QUIET HINTS "${CMAKE_CURRENT_LIST_DIR}/AdaptiveCpp/build/install")
+    if(AdaptiveCpp_FOUND)
+        message(STATUS "AdaptiveCpp ${AdaptiveCpp_VERSION} found in '${AdaptiveCpp_DIR}'; building the pCUDA plugins.")
+    else()
+        message(STATUS "AdaptiveCpp not found; skipping the pCUDA plugins (pcuda, ll_pcuda).")
+    endif()
+endif()
+
 if(WIN32)
     add_compile_definitions(NOMINMAX) # prevents windows.h defining min/max macros
 else()

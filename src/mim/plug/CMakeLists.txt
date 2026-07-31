@@ -24,6 +24,15 @@ set(MIM_PLUGINS
     vec
 )
 
+# The pCUDA plugins need AdaptiveCpp (HCF infrastructure and the pCUDA runtime);
+# they are only built if the top-level CMakeLists.txt found it.
+if(AdaptiveCpp_FOUND)
+    list(APPEND MIM_PLUGINS
+        ll_pcuda
+        pcuda
+    )
+endif()
+
 foreach(PLUGIN IN LISTS MIM_PLUGINS)
     add_subdirectory(${PLUGIN})
 endforeach()

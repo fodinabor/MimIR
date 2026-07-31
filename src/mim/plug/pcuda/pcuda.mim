@@ -1,0 +1,26 @@
+/// # The pcuda Plugin {#pcuda}
+///
+/// @see mim::plug::pcuda
+///
+/// A plugin for [AdaptiveCpp](https://github.com/AdaptiveCpp/AdaptiveCpp)'s pCUDA runtime.
+/// Unlike @ref nvptx it stays backend-agnostic: device code is lowered to AdaptiveCpp's generic
+/// SSCP builtins and JIT-compiled by the pCUDA runtime for whatever device is present.
+///
+/// [TOC]
+///
+/// ## Dependencies
+///
+plugin gpu;
+import compile;
+///
+/// ## Types
+///
+/// ### Streams
+///
+/// The pCUDA runtime ABI represents `pcudaStream_t` as a plain pointer, so the abstract
+/// %%gpu.Stream is lowered to a byte pointer (mirrors @ref nvptx).
+let %pcuda.Stream = %mem.Ptr0 I8;
+///
+/// ## Phases
+///
+axm %pcuda.stream_impl_repl: %compile.Phase;

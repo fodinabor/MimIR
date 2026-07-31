@@ -33,3 +33,12 @@ config.available_features.add(f"system-{sys.platform}")
 # lit.site.cfg.py. Tests gate on this via `// REQUIRES: cuda`.
 if getattr(config, 'cuda_can_run_on_device', False):
     config.available_features.add('cuda')
+# pCUDA support (needs AdaptiveCpp) is detected once by CMake and passed in via lit.site.cfg.py.
+# Tests gate on this via `// REQUIRES: pcuda` and link against the runtime via `%acpp_link`.
+# Execution needs no GPU: AdaptiveCpp JIT-compiles the embedded device image for the CPU
+# (OpenMP backend) when no GPU is present.
+acpp_lib_dir = getattr(config, 'acpp_lib_dir', '')
+if acpp_lib_dir:
+    config.available_features.add('pcuda')
+    config.substitutions.append(
+        ('%acpp_link', '-L{0} -lacpp-rt -Wl,-rpath,{0}'.format(acpp_lib_dir)))

@@ -1,0 +1,70 @@
+// REQUIRES: pcuda
+// RUN: rm -f %{s:stem}.ll %{s:stem}_dev.ll %{s:stem}_dev.bc %t
+// RUN: %mim %s -p ll_pcuda -o -
+// RUN: %FileCheck %s --input-file=%{s:stem}.ll --check-prefix=HOST
+// RUN: %FileCheck %s --input-file=%{s:stem}_dev.ll --check-prefix=DEVICE
+// RUN: %if system-linux %{ clang++ %{s:stem}.ll -o %t %acpp_link -Wno-override-module %}
+// RUN: %if system-linux %{ %t; test $? -eq 42 %}
+// RUN: %if system-linux %{ %t 1 2 3; test $? -eq 42 %}
+// RUN: %if system-linux %{ %t 1 2 3 4 5; test $? -eq 42 %}
+
+plugin core;
+plugin gpu;
+
+con kernel (m1: %gpu.GlobalM, m3: %gpu.SharedM, m4: %gpu.ConstM, m5: %gpu.LocalM, group_id item_id: Idx 4,
+            smem: %gpu.SharedPtr «4; I32», data: %gpu.GlobalPtr I32,
+            return: Cn [%gpu.GlobalM, %gpu.SharedM, %gpu.ConstM, %gpu.LocalM]) =
+    let el = %mem.lea (smem, item_id);
+    let val = %core.bitcast I32 item_id;
+    let m3 = %mem.store (m3, el, val);
+    let m1 = %mem.store (m1, data, 42I32);
+    return (m1, m3, m4, m5);
+
+fun extern main (m0: %mem.M 0, argc: I32, argv: %mem.Ptr («⊤:Nat; %mem.Ptr («⊤:Nat; I8», 0)», 0))
+: [%mem.M 0, I32] =
+    let (m0, ptr) = %mem.alloc (I32, 0) m0;
+    let m0 = %mem.store (m0, ptr, argc);
+
+    let (m0, m1, m4) = %gpu.init m0;
+
+    let (m1, d_ptr) = %mem.alloc (I32, 1) m1;
+    let (m0, m1) = %gpu.copy_to_device.block (m0, m1, ptr, d_ptr);
+
+    ret (m0, m1, m4) = %gpu.launch (4, 4, %gpu.default_stream, tt, «4; I32») kernel d_ptr $ (m0, m1, m4);
+
+    let (m0, m1) = %gpu.copy_to_host.block (m0, m1, d_ptr, ptr);
+    let m1 = %mem.free (m1, d_ptr);
+
+    let m0 = %gpu.deinit (m0, m1, m4);
+
+    let (m0, val) = %mem.load (m0, ptr);
+    let m0 = %mem.free (m0, ptr);
+
+    return (m0, val);
+
+// In the default `embed` mode the definition of the pcudaError_t check wrapper `@mim_pcuda_check`
+// (rt/mim_pcuda_rt.c) is spliced into the host module (issue #486); the HCF device image is
+// embedded into the host module and registered with the pCUDA runtime by a global constructor.
+// HOST: define{{.*}}@mim_pcuda_check
+// HOST-DAG: @__acpp_local_sscp_hcf_content = private constant
+// HOST-DAG: @.kname.0 = private constant
+// HOST: call void @__acpp_register_hcf(ptr @__acpp_local_sscp_hcf_content
+// HOST: define i32 @main(
+// HOST-DAG: call i8* @malloc(i64 4)
+// HOST-DAG: call i32 @pcudaSetDevice(i32 0)
+// HOST-DAG: call i32 @pcudaAllocateDevice
+// HOST: call i32 @pcudaMemcpy({{.*}}, i32 1)
+// HOST: call void @__pcudaPushCallConfiguration(i64 {{.*}}, i32 1, i64 {{.*}}, i32 1, i64 16, ptr null)
+// HOST: call i32 @__pcudaKernelCall
+// HOST: call i32 @pcudaMemcpy({{.*}}, i32 2)
+// HOST: call i32 @pcudaFree(
+// HOST-DAG: call void @free
+// HOST: ret i32
+
+// DEVICE: @[[SH_PTR:.*]] = internal addrspace(3) global [[SH_PTR_T:.*]] undef
+// DEVICE: define void @kernel{{.*}}(ptr %[[GL_PTR:[0-9_a-zA-Z]+]])
+// DEVICE: %{{.*}} = call i64 @__acpp_sscp_get_local_id_x()
+// DEVICE-DAG: %[[SH_ELEM:.*]] = getelementptr inbounds [[SH_PTR_T]], ptr addrspacecast (ptr addrspace(3) @[[SH_PTR]] to ptr)
+// DEVICE-DAG: store {{.*}}, ptr %[[SH_ELEM]]
+// DEVICE-DAG: store i32 42, ptr %[[GL_PTR]]
+// DEVICE: !hipsycl.sscp.annotations =
