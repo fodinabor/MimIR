@@ -4,9 +4,17 @@
 ///
 /// [TOC]
 ///
-/// This plugin handles the optimization pipeline of the compilation of MimIR programs.
-/// This plugin's axioms can register mim::Phase%s.
-/// Invoke the optimization pipeline by defining a function `_compile: [] → %%compile.Phase`.
+/// This plugin provides the building blocks for MimIR's optimization pipeline: its axioms denote mim::Phase%s and the combinators that assemble them into a pipeline.
+/// Invoke the pipeline by defining a function `_compile: [] → %%compile.Phase`
+/// (or rely on a plugin-provided `_default_compile` such as the one in the `opt` plugin).
+///
+/// ## Command-Line Arguments {#compile_cli_args}
+///
+/// This plugin reads the following [plugin arguments](@ref clipluginargs) (`-X compile:<arg>`):
+///
+/// | Argument         | Effect                                                                                        |
+/// |------------------|-----------------------------------------------------------------------------------------------|
+/// | `aggr=<bool>`    | Sets the value of `%%compile.aggr` (see below). `<bool>` is one of `on`/`tt`/`true` or `off`/`ff`/`false`; a bare `aggr` is equivalent to `aggr=on`. Used by the `opt` pipeline to switch fixed-point iteration on/off. |
 ///
 /// ## Types
 ///
@@ -26,7 +34,7 @@ axm %compile.is_loaded: {n: Nat} → «n; I8» → Bool, normalize_is_loaded;
 ///
 /// ### %%compile.named
 ///
-/// Resolves to the `%compile.Phase` annex with the given fully-qualified name (e.g. `"clos.clos_conv"`).
+/// Resolves to the `%%compile.Phase` annex with the given fully-qualified name (e.g. `"%clos.clos_conv"`).
 /// Resolution is deferred until the phase pipeline is built so that the referenced plugin's `.mim` file does not
 /// have to be imported by users of this axm.
 /// If the named annex is missing at pipeline build time (its plugin is not loaded), it is silently elided, i.e. the
@@ -41,15 +49,38 @@ axm %compile.named: {n: Nat} → «n; I8» → %compile.Phase;
 ///
 axm %compile.cond: {n: Nat} → «n; I8» → %compile.Phase → %compile.Phase, normalize_cond;
 ///
+/// ### %%compile.aggr
+///
+/// Makes a fixed-point flag switchable from the command line.
+/// `%%compile.aggr fallback` yields `tt` if `-X compile:aggr=on` (also `=true` or a bare `aggr`) was passed,
+/// `ff` if `-X compile:aggr=off` (also `=false`), and otherwise the given `fallback`.
+/// Use it as the Bool of a `%%compile.phases` to make that pipeline's fixed-point iteration switchable via the CLI.
+///
+axm %compile.aggr: Bool → Bool, normalize_aggr;
+///
 /// ## Constructors
 ///
 /// ### %%compile.phases
 ///
-/// Sets up `n` phases and bundles them
+/// Bundles `n` phases into one pipeline (a mim::PhaseMan).
+/// The Bool selects fixed-point iteration:
+/// `tt` reruns the pipeline until no phase requests another round, `ff` runs it once.
 ///
 axm %compile.phases: {n: Nat} → Bool → «n; %compile.Phase» → %compile.Phase;
 ///
 /// ### Phases
+///
+/// * `beta_red`: β-reduction; inlines Lam%s that occur exactly once in the program (mim::BetaRed).
+/// * `branch_normalize`: η-expands non-Lam branch targets so both sides of a branch are Lam%s (mim::BranchNormalize).
+/// * `cleanup`: removes dead and unreachable code by rebuilding the World (mim::Cleanup).
+/// * `eta_conv`: combined, idempotent η-reduction/η-expansion (mim::EtaConv).
+/// * `lam_spec`: specializes a Lam at its call site by inlining higher-order arguments (mim::LamSpec).
+/// * `null`: does nothing; useful as an elided placeholder.
+/// * `ret_wrap`: prepares return continuations for the backend (mim::RetWrap).
+/// * `scalarize`: flattens function signatures (mim::Scalarize).
+/// * `tail_rec_elim`: turns tail recursion into loops (mim::TailRecElim).
+/// * `prefix_cleanup`: like `cleanup`, but additionally drops externals whose name starts with the given prefix (mim::PrefixCleanup).
+/// * `internal_cleanup`: `prefix_cleanup "internal_"`.
 ///
 axm %compile.beta_red:                            %compile.Phase;
 axm %compile.branch_normalize:                    %compile.Phase;

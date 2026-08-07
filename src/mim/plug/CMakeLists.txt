@@ -9,9 +9,11 @@ set(MIM_PLUGINS
     dl
     gpu
     ll
+    ll_nvptx
     math
     matrix
     mem
+    nvptx
     opt
     option
     ord

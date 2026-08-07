@@ -10,7 +10,6 @@ bool EtaConv::analyze() {
 
 void EtaConv::analyze(const Def* def) {
     if (auto [_, ins] = analyzed_.emplace(def); !ins) return;
-    if (def->isa<Var>()) return; // ignore Var's mut
 
     if (auto app = def->isa<App>()) {
         visit(app->type(), Lattice::Unknown_1);
@@ -46,6 +45,7 @@ const Def* EtaConv::rewrite(const Def* old_def) {
         if (auto f = lam->eta_reduce()) {
             // η-redex `λx.f x`: reduce unless `f` wants to stay expanded.
             if (!keep_wrapper(f)) {
+                profile_count("η-reduction");
                 DLOG("eta-reduce: `{}` → `{}`", lam, f);
                 invalidate();
                 return rewrite(f);
@@ -55,6 +55,7 @@ const Def* EtaConv::rewrite(const Def* old_def) {
             return Lam::eta_expand(rewrite_no_eta(f));
         } else if (eta_expand(lam)) {
             // bare Lam used in an unknown position more than once or in both positions: η-expand.
+            profile_count("η-expansion");
             auto eta = Lam::eta_expand(rewrite_no_eta(lam));
             DLOG("eta-expand: `{}` → `{}`", lam, eta);
             invalidate();
@@ -80,6 +81,6 @@ const Def* EtaConv::rewrite_imm_App(const App* app) {
     return new_world().app(callee, rewrite(app->arg()));
 }
 
-const Def* EtaConv::rewrite_imm_Var(const Var* var) { return new_world().var(rewrite_no_eta(var->mut())->as_mut()); }
+const Def* EtaConv::rewrite_imm_Var(const Var* var) { return new_world().var(rewrite_no_eta(var->binder())->as_mut()); }
 
 } // namespace mim

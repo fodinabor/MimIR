@@ -1,10 +1,9 @@
 #include "mim/rewrite.h"
 
 #include <absl/container/fixed_array.h>
+#include <fe/assert.h>
 
 #include "mim/world.h"
-
-#include "fe/assert.h"
 
 // Don't use fancy C++-lambdas; it's way too annoying stepping through them in a debugger.
 
@@ -106,7 +105,7 @@ const Def* Rewriter::rewrite_imm_Type  (const Type*   d) { return world().type  
 const Def* Rewriter::rewrite_imm_UInc  (const UInc*   d) { return world().uinc  (rewrite(d->op()),     d->offset()); }
 const Def* Rewriter::rewrite_imm_UMax  (const UMax*   d) { return world().umax  (rewrite(d->ops()));                 }
 const Def* Rewriter::rewrite_imm_Uniq  (const Uniq*   d) { return world().uniq  (rewrite(d->op()));                  }
-const Def* Rewriter::rewrite_imm_Var   (const Var*    d) { return world().var   (rewrite(d->mut())->as_mut());       }
+const Def* Rewriter::rewrite_imm_Var   (const Var*    d) { return world().var   (rewrite(d->binder())->as_mut());       }
 const Def* Rewriter::rewrite_imm_Top   (const Top*    d) { return world().top   (rewrite(d->type()));                }
 const Def* Rewriter::rewrite_imm_Bot   (const Bot*    d) { return world().bot   (rewrite(d->type()));                }
 const Def* Rewriter::rewrite_imm_Meet  (const Meet*   d) { return world().meet  (rewrite(d->ops()));                 }
@@ -271,6 +270,11 @@ const Def* Rewriter::rewrite_stub(Def* old_mut, Def* new_mut) {
         auto _ = enter(old_mut);
         for (size_t i = 0, e = old_mut->num_ops(); i != e; ++i)
             new_mut->set(i, rewrite(old_mut->op(i)));
+
+        // Immutabilize the *new* binder in hindsight:
+        // even when the old binder was not immutabilizable, rewriting may have made it vacuous.
+        if (new_mut->is_immutabilizable())
+            if (auto new_imm = new_mut->immutabilize()) return map(old_mut, new_imm);
     }
 
     return new_mut;

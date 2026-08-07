@@ -311,7 +311,9 @@ void PiExpr::emit_body(Emitter& e, const Def*) const { emit(e); }
 const Def* PiExpr::emit_(Emitter& e) const {
     dom()->emit_type(e);
     auto cod = codom() ? codom()->emit(e) : e.world().type_bot();
-    return dom()->pi_->set_codom(cod);
+    auto pi  = dom()->pi_->set_codom(cod);
+    if (auto imm = pi->immutabilize()) return imm;
+    return pi;
 }
 
 const Def* LamExpr::emit_decl(Emitter& e, const Def*) const { return lam()->emit_decl(e), lam()->def(); }
@@ -562,7 +564,7 @@ void LamDecl::emit_body(Emitter& e) const {
                   "external function '{}' is not closed: its inferred type escapes into the scope of '{}'. This "
                   "usually means an unannotated parameter's type could only be inferred to depend on a variable bound "
                   "in an inner/sibling scope; add an explicit type annotation to the offending parameter.",
-                  dbg().sym(), (*lam->free_vars().begin())->mut()->sym());
+                  dbg().sym(), (*lam->free_vars().begin())->binder()->sym());
         lam->externalize();
     }
     e.attach(annex_, sub_, dbg().sym(), def_);

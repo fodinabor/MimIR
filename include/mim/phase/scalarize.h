@@ -63,11 +63,14 @@ private:
         void inspect(const Def* def);
         /// Marks parameter @p dom of @p pi as *keep whole* by OR-ing bit @p dom into a per-Pi bitmask stored
         /// in lattice() under @p pi.
-        /// We store the fact via lattice_force() - **not** via lattice(concr, abstr)/pin_top() - because those also
-        /// seed the rewriter map(), which this same-World Analysis would then substitute nonsensically.
+        /// We store the fact via lattice_force() - **not** via lattice(concr, abstr)/pin():
+        /// growing the mask swaps one Nat literal for another - non-monotone in terms of Def%s.
+        /// As with any lattice write, the bitmask also lands in the rewriter map(),
+        /// short-circuiting later rewrite(pi) calls to the Nat.
+        /// That is harmless for this same-World Analysis:
+        /// drain() discards rewrite results, and inspect() always receives the old def.
         /// A fresh bit invalidate()s.
         void keep(const Pi* pi, size_t dom);
-        void pin(const Pi* pi);        ///< Pins the whole @p pi via the ⊤ sentinel (`pi ↦ pi`).
         void pin_tree(const Def* def); ///< pin%s every flattenable Pi nested in @p def%'s type tree.
         /// As above, but skips defs already in @p visited - seed it to exempt subtrees from pinning.
         void pin_tree(const Def* def, DefSet& visited);

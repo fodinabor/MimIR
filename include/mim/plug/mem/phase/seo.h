@@ -5,7 +5,7 @@
 #include <mim/def.h>
 #include <mim/phase.h>
 
-#include "mim/util/util.h"
+#include <mim/util/util.h>
 
 namespace mim::plug::mem::phase {
 
@@ -63,6 +63,9 @@ private:
         const Def* sccp_join(Lam*, const Def*, const Def*);
         DefVec sccp(Lam*, Defs vars, Defs abstr_args);
 
+        /// Applies @p known to @p abstr_targs (one per tvar): propagates phis, runs SCCP + GVN, and sets the vars.
+        const Def* apply_known(Lam* known, Defs abstr_targs);
+
         // GVN
         const Proxy* mk_bundle(Lam* lam, const Def* var, Defs bundle_vars);
         void gvn_bundle(Lam*, Defs, Defs, Span<const Def*>);
@@ -87,7 +90,8 @@ private:
         // global (kept between iterations)
         Def2Def sloxy2slot_;
         absl::btree_set<const Def*, GIDLt<const Def*>> slots_; // actually slot ptrs
-        LamSet unknowns_; // Lam%s reached as a *value*; their signature must stay untouched
+        LamSet unknowns_;            // Lam%s reached as a *value*; their signature must stay untouched
+        LamMap<MutSet> lam2callers_; // all muts that apply a Lam; tainted when the Lam's abstract vars change
     };
 
 public:
@@ -106,6 +110,7 @@ private:
         const Def* val;
     };
 
+    /// Was the SSA construction able to eliminate this sloxy?
     const Def* isa_optimized_sloxy(const Def*) const;
     /// The (memoized) live phis of @p old_lam.
     const Vector<Phi>& phis_of(Lam* old_lam);
@@ -113,8 +118,9 @@ private:
     bool needs_seo(View<Phi>, Lam* old_lam);
     /// Builds (and caches) the new Lam for @p old_lam with propagated vars removed and kept phis appended.
     Lam* build_lam(View<Phi>, Lam* old_lam);
-    /// Builds the argument list for an App of @p old_lam matching the signature built by build_lam().
-    DefVec build_args(View<Phi>, Lam* old_lam, const App* old_app);
+    /// Builds the argument list for a jump to @p old_lam (with the given @p old_targs, one per tvar)
+    /// matching the signature built by build_lam().
+    DefVec build_args(View<Phi>, Lam* old_lam, Defs old_targs);
 
     Analysis analysis_;
     Lam2Lam lam_old2new_;

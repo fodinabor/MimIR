@@ -9,8 +9,8 @@
 /// ## Dependencies
 ///
 /// `opt` only depends on `compile`.
-/// Every other plugin is referenced *by name* through `%compile.named` (which resolves to the plugin's
-/// annex iff it is loaded) and `%compile.cond` (which gates a whole sub-pipeline on a plugin being loaded).
+/// Every other plugin is referenced *by name* through `%%compile.named` (which resolves to the plugin's
+/// annex iff it is loaded) and `%%compile.cond` (which gates a whole sub-pipeline on a plugin being loaded).
 /// This way the default pipeline does not have to import any of the optional plugins.
 ///
 plugin compile;
@@ -19,7 +19,8 @@ plugin compile;
 ///
 lam extern _default_compile (): %compile.Phase =
     let optimize =
-        %compile.phases tt (
+        // fixed-point iteration off by default; enable with `-X compile:aggr=on`
+        %compile.phases (%compile.aggr ff) (
             %compile.scalarize,
             %compile.phases tt (
                 %compile.beta_red,
@@ -58,7 +59,6 @@ lam extern _default_compile (): %compile.Phase =
             );
         %compile.cond "clos" (
             %compile.phases ff (
-                %compile.named "%mem.add_mem",
                 %compile.named "%clos.clos_conv_prep",
                 %compile.named "%clos.clos_conv",
                 clos_opt_phases,
@@ -77,9 +77,11 @@ lam extern _default_compile (): %compile.Phase =
         %compile.branch_normalize,
         %compile.ret_wrap,
         %compile.named "%mem.remem_repl",
+        %compile.named "%nvptx.stream_impl_repl",
         %compile.named "%mem.alloc2malloc_repl",
         %compile.named "%refly.remove_dbg_repl",
         %compile.named "%gpu.check_addr_spaces_repl",
         // emit LLVM IR to <world>.ll iff the `ll` plugin is loaded (`-p ll`)
         %compile.named "%ll.emit",
+        %compile.named "%ll_nvptx.emit",
     );

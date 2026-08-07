@@ -1,14 +1,15 @@
 #include "mim/plug/tensor/phase/lower_map_reduce.h"
 
-#include "mim/def.h"
-#include "mim/lam.h"
+#include <mim/def.h>
+#include <mim/lam.h>
 
-#include "mim/util/types.h"
+#include <mim/util/types.h>
 
-#include "mim/plug/affine/affine.h"
-#include "mim/plug/core/core.h"
-#include "mim/plug/mem/mem.h"
-#include "mim/plug/cps/cps.h"
+#include <mim/plug/affine/affine.h>
+#include <mim/plug/core/core.h>
+#include <mim/plug/cps/cps.h>
+#include <mim/plug/mem/mem.h>
+
 #include "mim/plug/tensor/tensor.h"
 
 namespace mim::plug::tensor::phase {
@@ -371,7 +372,7 @@ const Def* LowerMapReduce::lower_map_reduce(const App* app) {
         comb->set("comb");
         current_mut->app(true, comb, {w.tuple({element_acc, w.tuple(input_elements)}), cont});
         return call;
-    } catch (const std::exception& e) { error("error during lowering map_reduce: {}", e.what()); }
+    } catch (const std::exception& e) { fe::throwf("error during lowering map_reduce: {}", e.what()); }
 }
 
 const Def* LowerMapReduce::build_pointwise(const Def* inputs,

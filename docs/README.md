@@ -5,7 +5,7 @@
 [![Discord](https://img.shields.io/discord/960975142459179068?style=social&logo=discord&logoColor=black)](https://discord.gg/FPp7hdj3fQ)
 
 [![Release](https://img.shields.io/github/v/release/mimir/mimir?style=flat-square&logo=starship&color=blue&label=Release)](https://github.com/mimir/mimir/releases)
-[![Docs](https://img.shields.io/badge/Docs-master/v0.1-blue?style=flat-square&logo=gitbook&logoColor=white)](https://mimir.github.io)
+[![Docs](https://img.shields.io/badge/Docs-master/v0.2/v0.1-blue?style=flat-square&logo=gitbook&logoColor=white)](https://mimir.github.io)
 [![License](https://img.shields.io/github/license/mimir/mimir?style=flat-square&color=blue&logo=opensourceinitiative&logoColor=white&label=License)](https://github.com/mimir/mimir/blob/master/LICENSE.TXT)
 [![C++23](https://img.shields.io/badge/C%2B%2B-23-blue?style=flat-square&logo=cplusplus)](https://en.wikipedia.org/wiki/C%2B%2B#Standardization)
 [![Python](https://img.shields.io/badge/Python-3.10-blue?style=flat-square&logo=python&logoColor=white)](https://www.python.org)
@@ -20,7 +20,7 @@
 **MimIR** is a pure, graph-based, [higher-order](https://en.wikipedia.org/wiki/Higher-order_function) intermediate representation rooted in the [**Calculus of Constructions**](https://en.wikipedia.org/wiki/Calculus_of_constructions).
 MimIR provides:
 
-- [**Dependent types**](https://en.wikipedia.org/wiki/Dependent_type), [**parametric polymorphism**](https://en.wikipedia.org/wiki/Parametric_polymorphism), and [**higher-order functions**](https://en.wikipedia.org/wiki/Higher-order_function) out of the box
+- [**Higher-order functions**](https://en.wikipedia.org/wiki/Higher-order_function), [**parametric polymorphism**](https://en.wikipedia.org/wiki/Parametric_polymorphism), and [**dependent types**](https://en.wikipedia.org/wiki/Dependent_type) out of the box
 - **Extensible plugins** for domain-specific axioms, types, normalizers, and code generation
 - [**SSA**](https://en.wikipedia.org/wiki/Static_single-assignment_form) **without dominance**: a scopeless IR for higher-order programs based on free-variable nesting
 - A [**sea-of-nodes**](https://github.com/SeaOfNodes) style IR with on-the-fly normalization, type checking, and [partial evaluation](https://en.wikipedia.org/wiki/Partial_evaluation)
@@ -55,6 +55,7 @@ The original `sq` lambda is now simply unreachable from the world's [roots](@ref
 
 For the full picture, with more examples and the graphs MimIR builds for them, read the [Tour of MimIR](@ref mimir).
 With MimIR's Python bindings, you can write full-blown DSL compilers embedded in Python; see the [embedded Python DSL](@ref python) for a complete end-to-end example.
+Or, naturally, you can continue exploring the rest of the [documentation](https://mimir.github.io/usergroup0.html).
 
 ## 💡 Why MimIR?
 

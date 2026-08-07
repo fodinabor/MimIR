@@ -2,9 +2,13 @@
 
 #include <mim/plug/core/core.h>
 
-namespace mim::plug::clos {
+namespace mim::plug::clos::phase {
 
 namespace {
+
+// Exception-handling closures (sjlj branches, throw/landing-pad continuations) are always constructed by this
+// phase itself with an explicit leading `%mem.M`, so their env slot is always 1 -- see the callers of split/rebuild.
+constexpr size_t Sjlj_Env_Param = 1_u64;
 
 std::array<const Def*, 3> split(const Def* def) {
     auto new_ops = DefVec(def->num_projs() - 2, nullptr);
@@ -15,24 +19,21 @@ std::array<const Def*, 3> split(const Def* def) {
         auto op = def->proj(i);
         if (op == w.call<mem::M>(0) || op->type() == w.call<mem::M>(0))
             mem = op;
-        else if (i == Clos_Env_Param)
+        else if (i == Sjlj_Env_Param)
             env = op;
         else
             new_ops[j++] = op;
     }
     assert(mem && env);
-    auto remaining = def->is_intro() ? w.tuple(new_ops) : w.sigma(new_ops);
-    if (new_ops.size() == 1 && remaining != new_ops[0]) {
-        // FIXME: For some reason this is not constant folded away??
-        remaining = new_ops[0];
-    }
+    // Unwrap a single remaining component: we want the bare value here, not a 1-element tuple/sigma wrapper.
+    auto remaining = new_ops.size() == 1 ? new_ops[0] : def->is_intro() ? w.tuple(new_ops) : w.sigma(new_ops);
     return {mem, env, remaining};
 }
 
 const Def* rebuild(const Def* mem, const Def* env, Defs remaining) {
     auto& w      = mem->world();
     auto new_ops = DefVec(remaining.size() + 2, [&](auto i) -> const Def* {
-        static_assert(Clos_Env_Param == 1);
+        static_assert(Sjlj_Env_Param == 1);
         if (i == 0) return mem;
         if (i == 1) return env;
         return remaining[i - 2];
@@ -87,8 +88,8 @@ Lam* Clos2SJLJ::get_throw(const Def* dom) {
     auto [p, inserted] = dom2throw_.emplace(dom, nullptr);
     auto& tlam         = p->second;
     if (inserted || !tlam) {
-        tlam                = w.mut_con(clos_sub_env(dom, w.sigma({jb_type(), rb_type(), tag_type()})))->set("throw");
-        auto [m0, env, var] = split(tlam->var());
+        tlam = w.mut_con(clos_sub_env(Sjlj_Env_Param, dom, w.sigma({jb_type(), rb_type(), tag_type()})))->set("throw");
+        auto [m0, env, var]    = split(tlam->var());
         auto [jbuf, rbuf, tag] = env->projs<3>();
         auto [m1, r]           = mem::op_alloc(var->type(), m0)->projs<2>();
         auto m2                = w.call<mem::store>(Defs{m1, r, var});
@@ -126,7 +127,7 @@ void Clos2SJLJ::convert(Lam* lam) {
     {
         auto m0       = mem::mem_var(lam);
         auto [m1, jb] = w.call<clos::alloc_jmpbuf>(m0)->projs<2>();
-        auto [m2, rb] = mem::op_slot(void_ptr(), m1)->projs<2>();
+        auto [m2, rb] = mem::op_alloc(void_ptr(), m1)->projs<2>();
         auto new_args = lam->vars();
         new_args[0]   = m2;
         auto new_defs = lam->reduce(w.tuple(new_args));
@@ -182,6 +183,7 @@ const Def* Clos2SJLJ::subst_exn_closures(const Def* def, Def2Def& memo) {
         return memo[def] = clos_pack(w.tuple({cur_jbuf_, cur_rbuf_, w.lit_idx(i)}), tlam, c.type());
     }
     if (def->isa_mut() || !def->is_term()) return def;
+    if (def->isa<Var>()) return def; // atomic; binder is in binder_ and not descended into here
     auto new_ops     = DefVec(def->num_ops(), [&](size_t i) { return subst_exn_closures(def->op(i), memo); });
     return memo[def] = def->rebuild(def->type(), new_ops);
 }
@@ -192,4 +194,4 @@ const Def* Clos2SJLJ::rewrite_mut_Lam(Lam* old) {
     return new_def;
 }
 
-} // namespace mim::plug::clos
+} // namespace mim::plug::clos::phase
