@@ -6,6 +6,7 @@ set(MIM_PLUGINS
     compile
     core
     cps
+    demo
     dl
     gpu
     ll

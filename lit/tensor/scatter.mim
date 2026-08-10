@@ -1,7 +1,8 @@
-// RUN: %mim -p opt %s -p direct -p affine -o - | %FileCheck %s
+// RUN: %mim -p opt %s -p affine -o - | %FileCheck %s
 plugin core;
 plugin tensor;
 plugin affine;
+plugin compile;
 
 // CHECK-DAG: fun extern scatter1d
 fun extern scatter1d (input: «4; I32», index: «2; Idx 4», updates: «2; I32»): «4; I32» =
@@ -10,3 +11,11 @@ fun extern scatter1d (input: «4; I32», index: «2; Idx 4», updates: «2; I32�
 // CHECK-DAG: fun extern scatter2d
 fun extern scatter2d (input: «2, 3; I32», index: «2, 2; Idx 3», updates: «2, 2; I32»): «2, 3; I32» =
     return (%tensor.scatter @(I32, 2) ((2, 3), (2, 2)) 1_2 (input, index, updates));
+
+lam extern _compile (): %compile.Phase =
+    %compile.phases ff (
+        %compile.internal_cleanup,
+        %tensor.lower_tensor,
+        %tensor.lower_map_reduce,
+        %compile.internal_cleanup,
+    );

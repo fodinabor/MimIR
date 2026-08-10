@@ -112,11 +112,11 @@ const Def* OpPatternAnalysis::rewrite_imm_App(const App* app) {
             app->world().ILOG("OpPatternAnalysis: kind {} ({}) for {} {}", (int)kind, kind_name(kind), app, summary);
     };
 
-    if (auto mr = Axm::isa<tensor::map_reduce>(app)) {
+    if (auto mr = Axm::isa<tensor::map_reduce_post>(app)) {
         record_kind(analyze_map_reduce_aff(mr), summarize_map_reduce_aff(mr));
     } else if (Axm::isa<tensor::dot_product>(app) || Axm::isa<tensor::product_2d>(app)) {
-        // Simple map_reduce and dot products are reductions.
-        // We could be more precise for map_reduce if we check if subs covers all output dims.
+        // Simple map_reduce_post and dot products are reductions.
+        // We could be more precise for map_reduce_post if we check if subs covers all output dims.
         record_kind(OpPatternKind::kCommReduce);
     } else if (Axm::isa<tensor::broadcast>(app) || Axm::isa<tensor::broadcast_in_dim>(app)) {
         record_kind(OpPatternKind::kBroadcast);
@@ -133,9 +133,9 @@ const Def* OpPatternAnalysis::rewrite_imm_App(const App* app) {
 
 std::string OpPatternAnalysis::summarize_map_reduce_aff(const App* mra) {
     auto callee = mra->callee()->as<App>();
-    auto [nis, ToRoRr, SoSr, _TisRisSis, comb_init, map_out, maps] = callee->uncurry_args<7>();
+    auto [nis, meta, SoSr, _TisRisSis, comb_init, map_out, maps] = callee->uncurry_args<7>();
     (void)_TisRisSis;
-    auto [To, Ro, Rr] = ToRoRr->projs<3>();
+    auto [To, Tp, Ro, Rr] = meta->projs<4>();
 
     auto nis_lit = Lit::isa<u64>(nis);
     auto Ro_lit  = Lit::isa<u64>(Ro);
@@ -156,9 +156,9 @@ std::string OpPatternAnalysis::summarize_map_reduce_aff(const App* mra) {
 
 OpPatternKind OpPatternAnalysis::analyze_map_reduce_aff(const App* mra) {
     auto callee = mra->callee()->as<App>();
-    auto [nis, ToRoRr, SoSr, TisRisSis, comb_init, map_out, maps] = callee->uncurry_args<7>();
+    auto [nis, meta, SoSr, TisRisSis, comb_init, map_out, maps] = callee->uncurry_args<7>();
 
-    auto [To, Ro, Rr] = ToRoRr->projs<3>();
+    auto [To, Tp, Ro, Rr] = meta->projs<4>();
     auto Rr_lit = Lit::isa<u64>(Rr);
 
     if (!Rr_lit) return OpPatternKind::kOpaque;

@@ -1,12 +1,21 @@
-// RUN: %mim -p opt %s -p direct -p affine -o - | %FileCheck %s
+// RUN: %mim -p opt %s -p affine -o - | %FileCheck %s
 
 plugin core;
 plugin tensor;
 plugin affine;
 plugin mem;
+plugin compile;
 
 fun extern test_pad {n m p q r s: Nat} (input: «n, m; I32»): «pad_shape ((p, q), (n, m), (r, s)); I32» =
     return (%tensor.pad @(I32, 2) (n, m) (0, (p, q), (r, s)) (input, 0I32));
+
+lam extern _compile (): %compile.Phase =
+    %compile.phases ff (
+        %compile.internal_cleanup,
+        %tensor.lower_tensor,
+        %tensor.lower_map_reduce,
+        %compile.internal_cleanup,
+    );
 
 // CHECK: fun extern test_pad
 // CHECK-NOT: %tensor.pad
