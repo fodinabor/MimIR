@@ -1,5 +1,9 @@
 #include "mim/plug/tensor/phase/lower_to_mem.h"
 
+#include <mim/util/util.h>
+
+#include <mim/util/util.h>
+
 #include <mim/axm.h>
 #include <mim/def.h>
 #include <mim/lam.h>
@@ -35,11 +39,14 @@ const Def* splat_scalar(const Def* d) {
     return (d->is_closed() && !d->type()->isa<Arr>()) ? d : nullptr;
 }
 
-/// Is `app` one of the tensor ops this phase bufferizes?
-bool is_tensor_op(const App* app) {
-    return Axm::isa<tensor::get>(app) || Axm::isa<tensor::set>(app) || Axm::isa<tensor::broadcast>(app)
-        || Axm::isa<tensor::map_reduce>(app) || Axm::isa<tensor::pad>(app) || Axm::isa<tensor::concat>(app);
+/// Is `app` a tensor op whose lowering consumes a LowerToMem::fresh_mem?
+bool wants_fresh_mem(const App* app) {
+    return Axm::isa<tensor::set>(app) || Axm::isa<tensor::broadcast>(app) || Axm::isa<tensor::map_reduce_post>(app)
+        || Axm::isa<tensor::pad>(app) || Axm::isa<tensor::concat>(app);
 }
+
+/// Is `app` one of the tensor ops this phase bufferizes?
+bool is_tensor_op(const App* app) { return Axm::isa<tensor::get>(app) || wants_fresh_mem(app); }
 
 } // namespace
 
@@ -72,12 +79,13 @@ void LowerToMem::collect_tensor_types() {
                 auto [T, r, s] = app->callee()->as<App>()->args<3>();
                 if (T->isa<Arr>()) gate("tensor with array element type", T);
                 add_tensor_ty(app->arg()->proj(0)->type());
-            } else if (Axm::isa<tensor::map_reduce>(app)) {
+            } else if (Axm::isa<tensor::map_reduce_post>(app)) {
                 // result and each of the `nis` inputs are tensors.
                 add_tensor_ty(app->type());
                 auto [nis, meta, shapes, TisRisSis, comb_init, acc_out, accs]
                     = app->callee()->as<App>()->uncurry_args<7>();
-                if (meta->proj(3, 0)->isa<Arr>()) gate("tensor with array element type", meta->proj(3, 0));
+                if (meta->proj(4, 0)->isa<Arr>()) gate("tensor with array element type", meta->proj(4, 0));
+                if (meta->proj(4, 1)->isa<Arr>()) gate("tensor with array element type", meta->proj(4, 1));
                 if (auto nis_l = Lit::isa<u64>(nis)) {
                     auto Tis = TisRisSis->proj(3, 0);
                     for (u64 i = 0; i < *nis_l; ++i) {
@@ -189,6 +197,8 @@ void LowerToMem::start() {
     // Nothing tensor-related in the program: skip the whole-world rebuild entirely.
     if (tensor_fns_.empty() && !ops_seen_) return;
     RWPhase::start();
+    // Every fresh-memory continuation must have found an enclosing lam to be chained into.
+    assert(pending_.empty());
 }
 
 const Def* LowerToMem::buf_of(const Def* arr_ty) {
@@ -214,6 +224,40 @@ const Def* LowerToMem::fold_index(const Def* shape, const Def* idx) {
 const Def* LowerToMem::bot_mem() {
     auto& w = new_world();
     return w.bot(w.call<mem::M>(0));
+}
+
+const Def* LowerToMem::fresh_mem() {
+    auto k = mem::mut_con(new_world())->set("fresh_mem");
+    pending_.push_back(k);
+    return k->var();
+}
+
+void LowerToMem::wrap_fresh_mem(Lam* new_lam) {
+    auto& w     = new_world();
+    auto filter = new_lam->filter();
+    auto body   = new_lam->body();
+    new_lam->unset();
+    // The last-minted continuation carries the original body; the lam ends up requesting the first memory.
+    for (auto k : pending_ | std::views::reverse) {
+        k->set(true, body); // filter `tt`: k vanishes as soon as AddMem substitutes the real memory
+        body = w.app(w.annex<mem::fresh>(), w.tuple({w.lit_nat_0(), k}));
+    }
+    new_lam->set(filter, body);
+}
+
+const Def* LowerToMem::rewrite(const Def* old_def) {
+    // An op lowering that consumes a fresh memory references its receiving continuation's var (see
+    // fresh_mem). The global memo would share such a lowering with every other function that mentions the
+    // same (closed) old op - where that var would dangle - so these ops are memoized per enclosing lam.
+    if (!is_bootstrapping()) {
+        if (auto app = old_def->isa<App>(); app && wants_fresh_mem(app)) {
+            if (auto i = fresh_memo_.find(app); i != fresh_memo_.end()) return i->second;
+            auto new_def = rewrite_imm_App(app);
+            fresh_memo_.emplace(app, new_def);
+            return new_def;
+        }
+    }
+    return RWPhase::rewrite(old_def);
 }
 
 bool LowerToMem::mentions_tensor(const Def* t) const {
@@ -246,6 +290,17 @@ const Def* LowerToMem::conv_boundary(const Def* t) {
 const Def* LowerToMem::rewrite_mut_Lam(Lam* lam) {
     if (is_bootstrapping()) return RWPhase::rewrite_mut_Lam(lam);
 
+    // Scope the fresh-memory bookkeeping: ops lowered while this body is rewritten mint their receiving
+    // continuations into pending_, which are chained in front of the finished body. Nested lams anchor
+    // their own requests (and their own per-lam op memo).
+    auto p       = Restore(pending_, {});
+    auto m       = Restore(fresh_memo_, {});
+    auto new_def = conv_mut_Lam(lam);
+    if (!pending_.empty()) wrap_fresh_mem(new_def->as_mut<Lam>());
+    return new_def;
+}
+
+const Def* LowerToMem::conv_mut_Lam(Lam* lam) {
     // A bufferized function: convert tensor-typed parameters to `%buffer.Buf`, including inside grouped
     // sigma parameters and continuation domains. No memory is introduced here — AddMem does that.
     if (is_tensor_fn(lam)) {
@@ -291,7 +346,7 @@ const Def* LowerToMem::rewrite_imm_App(const App* app) {
     if (Axm::isa<tensor::get>(app)) return lower_get(app);
     if (Axm::isa<tensor::set>(app)) return lower_set(app);
     if (Axm::isa<tensor::broadcast>(app)) return lower_broadcast(app);
-    if (Axm::isa<tensor::map_reduce>(app)) return lower_map_reduce(app);
+    if (Axm::isa<tensor::map_reduce_post>(app)) return lower_map_reduce(app);
     if (Axm::isa<tensor::pad>(app)) return lower_pad(app);
     if (Axm::isa<tensor::concat>(app)) return lower_concat(app);
 
@@ -392,13 +447,13 @@ const Def* LowerToMem::lower_set(const App* app) {
     auto fidx         = fold_index(s, index);
 
     if (reuse_in_place(app)) {
-        auto [m, buf2] = buffer::op_write(br, bs, bT, bot_mem(), arr, fidx, x)->projs<2>();
+        auto [m, buf2] = buffer::op_write(br, bs, bT, fresh_mem(), arr, fidx, x)->projs<2>();
         return buf2;
     }
 
     // AlwaysAllocate policy: allocate a fresh buffer, copy the source in, then write the element.
-    // This local chain is properly threaded; AddMem splices its `⊥` root into the global chain.
-    auto [m1, q]   = buffer::op_alloc(br, bs, bT, bot_mem())->projs<2>();
+    // This local chain is properly threaded; AddMem splices its placeholder root into the global chain.
+    auto [m1, q]   = buffer::op_alloc(br, bs, bT, fresh_mem())->projs<2>();
     auto m2        = buffer::op_copy(br, bs, bT, m1, q, arr);
     auto [m3, out] = buffer::op_write(br, bs, bT, m2, q, fidx, x)->projs<2>();
     return out;
@@ -434,19 +489,19 @@ const Def* LowerToMem::lower_broadcast(const App* app) {
     auto op       = w.annex<matrix::broadcast>();
     op            = w.app(op, w.tuple({T, bri, bsi, bro, bso, r}));
     op            = w.app(op, w.tuple({s_in, s_out}));
-    auto [m, out] = w.app(op, w.tuple({bot_mem(), input}))->projs<2>();
+    auto [m, out] = w.app(op, w.tuple({fresh_mem(), input}))->projs<2>();
     return out;
 }
 
 const Def* LowerToMem::lower_map_reduce(const App* app) {
-    // Thin bufferization: map the SSA `tensor.map_reduce` onto the buffer-world `matrix.map_reduce_aff`,
+    // Thin bufferization: map the SSA `tensor.map_reduce` onto the buffer-world `matrix.map_reduce_post`,
     // reusing the (rewritten) meta. The loop generation lives in the matrix plugin (`%matrix.lower_aff`).
     auto& w     = new_world();
     auto c      = rewrite(app->callee())->as<App>();
     auto inputs = rewrite(app->arg()); // the (bufferized) input buffers `is`
 
     auto [nis, meta, shapes, TisRisSis, comb_init, acc_out, accs] = c->uncurry_args<7>();
-    auto [comb, init]                                             = comb_init->projs<2>();
+    auto [comb, init, post]                                       = comb_init->projs<3>();
 
     // Value-world tensor inputs (e.g. literals): materialize them into buffers.
     if (auto nis_l = Lit::isa<u64>(nis)) {
@@ -467,7 +522,7 @@ const Def* LowerToMem::lower_map_reduce(const App* app) {
     }
 
     // Wrap the pure tensor combiner `Fn [To, «nis; Tis»] → To` into the mem-threaded combiner
-    // `Fn [%mem.M 0, To, «nis; Tis»] → [%mem.M 0, To]` that `matrix.map_reduce_aff` expects.
+    // `Fn [%mem.M 0, To, «nis; Tis»] → [%mem.M 0, To]` that `matrix.map_reduce_post` expects.
     auto mem_ty           = w.call<mem::M>(0);
     auto inner            = comb->type()->as<Pi>()->dom()->proj(0); // [To, «nis; Tis»]
     auto [cTo, ins_ty]    = inner->projs<2>();
@@ -478,15 +533,24 @@ const Def* LowerToMem::lower_map_reduce(const App* app) {
     after->app(true, cret, w.tuple({cm, after->var(0_n)}));
     memcomb->set(true, w.app(comb, w.tuple({w.tuple({cacc, cins}), after})));
 
-    auto op       = w.annex<matrix::map_reduce_aff>();
+    // Likewise wrap the pure epilogue `Fn To → To'` into `Fn [%mem.M 0, To] → [%mem.M 0, To']`.
+    auto pTp        = meta->proj(4, 1);
+    auto mempost    = w.mut_fun(w.sigma({mem_ty, cTo}), w.sigma({mem_ty, pTp}))->set("memPost");
+    auto [pm, pacc] = mempost->var(0_n)->projs<2>();
+    auto pret       = mempost->var(1);
+    auto pafter     = w.mut_con(pTp)->set("afterPost");
+    pafter->app(true, pret, w.tuple({pm, pafter->var(0_n)}));
+    mempost->set(true, w.app(post, w.tuple({pacc, pafter})));
+
+    auto op       = w.annex<matrix::map_reduce_post>();
     op            = w.app(op, nis);
     op            = w.app(op, meta);
     op            = w.app(op, shapes);
     op            = w.app(op, TisRisSis);
-    op            = w.app(op, w.tuple({memcomb, init}));
+    op            = w.app(op, w.tuple({memcomb, init, mempost}));
     op            = w.app(op, acc_out);
     op            = w.app(op, accs);
-    auto [m, out] = w.app(op, w.tuple({bot_mem(), inputs}))->projs<2>();
+    auto [m, out] = w.app(op, w.tuple({fresh_mem(), inputs}))->projs<2>();
     return out;
 }
 
@@ -522,7 +586,7 @@ const Def* LowerToMem::lower_pad(const App* app) {
     auto op       = w.annex<matrix::pad>();
     op            = w.app(op, w.tuple({T, r}));
     op            = w.app(op, w.tuple({s_in, s_out, mode, lo, hi}));
-    auto [m, out] = w.app(op, w.tuple({bot_mem(), input, value}))->projs<2>();
+    auto [m, out] = w.app(op, w.tuple({fresh_mem(), input, value}))->projs<2>();
     return out;
 }
 
@@ -574,7 +638,7 @@ const Def* LowerToMem::lower_concat(const App* app) {
     op            = w.app(op, ax);
     op            = w.app(op, Sis);
     op            = w.app(op, s_out);
-    auto [m, out] = w.app(op, w.tuple({bot_mem(), inputs}))->projs<2>();
+    auto [m, out] = w.app(op, w.tuple({fresh_mem(), inputs}))->projs<2>();
     return out;
 }
 
