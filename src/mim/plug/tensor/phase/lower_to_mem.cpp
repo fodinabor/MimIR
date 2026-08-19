@@ -132,17 +132,27 @@ void LowerToMem::collect_tensor_types() {
                         add_tensor_ty(app->arg()->proj(*nis_l, i)->type());
                     }
                 }
+            } else if (Axm::isa<tensor::if_static>(app)) {
+                // Value-level binding-time dispatch; this phase's rewrite residualizes it to its
+                // dynamic branch - not a tensor op.
             } else if (auto [axm, curry, trip] = Axm::get(app);
                        axm && curry == 0 && axm->plugin() == tensor::Plugin_Id) {
                 // Any other tensor op (a symbolic `shape`, …) has no buffer-world lowering.
                 gate("unbufferizable tensor op", app);
             }
-            // Lams passed inside a tensor op's curry chain (combiners, affine index maps) are element-level.
+            // Lams passed inside a tensor op's curry chain (combiners, affine index maps, schedule
+            // nests) are element-level — TRANSITIVELY, including their local helper lams: e.g. the
+            // loop-vector prefixes «r; I32» inside a schedule nest must not be mistaken for value
+            // tensors of a recorded «r; I32» tensor type.
             if (is_tensor_op(app)) {
-                for (const App* a = app; a; a = a->callee()->isa<App>()) {
-                    if (auto k = a->arg()->isa_mut<Lam>()) op_args_.emplace(k);
-                    for (auto op : a->arg()->ops())
-                        if (auto k = op ? op->isa_mut<Lam>() : nullptr) op_args_.emplace(k);
+                unique_queue<DefSet> wl3;
+                for (const App* a = app; a; a = a->callee()->isa<App>())
+                    wl3.push(a->arg());
+                while (!wl3.empty()) {
+                    auto d = wl3.pop();
+                    if (auto k = d->isa_mut<Lam>()) op_args_.emplace(k);
+                    for (auto op : d->ops())
+                        if (op) wl3.push(op);
                 }
             }
         }
@@ -348,6 +358,9 @@ const Def* LowerToMem::conv_mut_Lam(Lam* lam) {
 
 const Def* LowerToMem::rewrite_imm_App(const App* app) {
     if (is_bootstrapping()) return RWPhase::rewrite_imm_App(app);
+    // A `%tensor.if_static` still stuck at lowering time guards a runtime value: residualize to
+    // its dynamic branch.
+    if (Axm::isa<tensor::if_static>(app)) return rewrite(app->arg(3, 2));
     if (Axm::isa<tensor::get>(app)) return lower_get(app);
     if (Axm::isa<tensor::set>(app)) return lower_set(app);
     if (Axm::isa<tensor::broadcast>(app)) return lower_broadcast(app);
@@ -360,10 +373,24 @@ const Def* LowerToMem::rewrite_imm_App(const App* app) {
         return lower_call(app, callee);
 
     // Call of a converted continuation (a local lam or a parameter var whose domain mentions a tensor):
-    // materialize value-world tensor arguments into buffers. Element-level lams (op_args_) keep value ABI.
+    // materialize value-world tensor arguments into buffers. Element-level lams (op_args_) — and their
+    // continuation PARAMETERS (e.g. a schedule nest's `cell`, whose «r; I32» loop vector may look like
+    // a recorded tensor type) — keep value ABI.
     if (auto pi = Pi::isa_cn(app->callee()->type()); pi && mentions_tensor(pi->dom())) {
-        if (auto callee = app->callee()->isa_mut<Lam>(); callee && op_args_.contains(callee))
-            return RWPhase::rewrite_imm_App(app);
+        auto elementwise = [&](const Def* callee) {
+            if (auto lam = callee->isa_mut<Lam>()) return op_args_.contains(lam);
+            for (auto d = callee; d;) {
+                if (auto ex = d->isa<Extract>()) {
+                    d = ex->tuple();
+                    continue;
+                }
+                if (auto var = d->isa<Var>())
+                    if (auto lam = var->binder()->isa_mut<Lam>()) return op_args_.contains(lam);
+                break;
+            }
+            return false;
+        };
+        if (elementwise(app->callee())) return RWPhase::rewrite_imm_App(app);
         auto& w = new_world();
         return w.app(rewrite(app->callee()), materialize(pi->dom(), app->arg()));
     }

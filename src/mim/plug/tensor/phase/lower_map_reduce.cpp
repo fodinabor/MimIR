@@ -140,7 +140,7 @@ const Def* LowerMapReduce::lower_map_reduce(const App* app) {
     auto [nis_nps, meta, shapes, in_tys, comb_init, acc_out, accs_all] = c->uncurry_args<7>();
     auto [nis, nps]                                                    = nis_nps->projs<2>();
     auto [To, Tp, Ro, Rr]                                              = meta->projs<4>();
-    auto [So, Sr]                                                      = shapes->projs<2>();
+    auto [So, Sr, TSched, sched]                                       = shapes->projs<4>();
     auto [Tis, Ris, Sis, Tps, Rps, Sps]                                = in_tys->projs<6>();
     auto [comb, init, post]                                            = comb_init->projs<3>();
     auto [accs, post_accs]                                             = accs_all->projs<2>();
@@ -579,6 +579,9 @@ const Def* LowerMapReduce::lower_scatter(const App* app) {
 }
 
 const Def* LowerMapReduce::rewrite_imm_App(const App* app) {
+    // A `%tensor.if_static` still stuck at lowering time guards a runtime value: residualize to
+    // its dynamic branch.
+    if (Axm::isa<tensor::if_static>(app)) return rewrite(app->arg(3, 2));
     if (auto bc = Axm::isa<tensor::broadcast>(app)) {
         if (auto res = lower_broadcast(bc)) return res;
     } else if (auto mr = Axm::isa<tensor::map_reduce_post>(app)) {
