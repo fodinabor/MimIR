@@ -26,5 +26,5 @@ lam avgpool2x2_in  (oh ow kh kw: %affine.index): «2; %affine.index» =
      %affine.op.add (%affine.semiop.mul (ow, 2), kw));
 
 fun extern avgpool2x2 (input: «4, 4; F32»): «2, 2; F32» =
-    return (%tensor.map_reduce @1 @(F32, 2, 2) ((2, 2), (2, 2, 2, 2))
+    return (%tensor.map_reduce @1 @(F32, 2, 4) ((2, 2), (2, 2, 2, 2))
                 @(F32, 2, (4, 4)) (avgpool2x2_step, 0:F32) avgpool2x2_out avgpool2x2_in input);

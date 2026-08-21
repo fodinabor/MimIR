@@ -11,10 +11,10 @@ fun extern test_pad {n m p q r s: Nat} (input: «n, m; I32»): «pad_shape ((p, 
 
 lam extern _compile (): %compile.Phase =
     %compile.phases ff (
-        %compile.internal_cleanup,
+        %compile.cleanup,
         %tensor.lower_tensor,
         %tensor.lower_map_reduce,
-        %compile.internal_cleanup,
+        %compile.cleanup,
     );
 
 // CHECK: fun extern test_pad

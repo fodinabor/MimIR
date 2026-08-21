@@ -28,7 +28,7 @@ lam max_in (oh ow kh kw: %affine.index): «2; %affine.index» =
 
 fun extern avgpool2d_4x4 (input: «4, 4; F32»): «3, 3; F32» =
     let padded = %tensor.pad @(F32, 2) (4, 4) (0, (1, 1), (1, 1)) (input, 0:F32);
-    return (%tensor.map_reduce @1 @(F32, 2, 2) ((3, 3), (3, 3, 2, 2))
+    return (%tensor.map_reduce @1 @(F32, 2, 4) ((3, 3), (3, 3, 2, 2))
                 @(F32, 2, (6, 6))
                 (avg_step, 0:F32)
                 avg_out avg_in
@@ -36,7 +36,7 @@ fun extern avgpool2d_4x4 (input: «4, 4; F32»): «3, 3; F32» =
 
 fun extern maxpool2d_4x4 (input: «4, 4; F32»): «3, 3; F32» =
     let padded = %tensor.pad @(F32, 2) (4, 4) (0, (1, 1), (1, 1)) (input, 0xFF800000 : F32);
-    return (%tensor.map_reduce @1 @(F32, 2, 2) ((3, 3), (3, 3, 2, 2))
+    return (%tensor.map_reduce @1 @(F32, 2, 4) ((3, 3), (3, 3, 2, 2))
                 @(F32, 2, (6, 6))
                 (max_step, 0xFF800000 : F32)
                 max_out max_in

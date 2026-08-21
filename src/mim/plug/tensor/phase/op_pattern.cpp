@@ -133,13 +133,18 @@ const Def* OpPatternAnalysis::rewrite_imm_App(const App* app) {
 
 std::string OpPatternAnalysis::summarize_map_reduce_aff(const App* mra) {
     auto callee = mra->callee()->as<App>();
-    auto [nis, meta, SoSr, _TisRisSis, comb_init, map_out, maps] = callee->uncurry_args<7>();
-    (void)_TisRisSis;
-    auto [To, Tp, Ro, Rr] = meta->projs<4>();
+    auto [nis_nps, meta, shapes, in_tys, comb_init, map_out, maps_all] = callee->uncurry_args<7>();
+    (void)shapes, (void)in_tys, (void)comb_init;
+    auto [nis, nps]               = nis_nps->projs<2>();
+    auto [To, Tp, Ro, Rn, TSched] = meta->projs<5>();
+    auto [maps, post_maps]        = maps_all->projs<2>();
+    (void)nps, (void)To, (void)Tp, (void)TSched, (void)post_maps;
 
     auto nis_lit = Lit::isa<u64>(nis);
     auto Ro_lit  = Lit::isa<u64>(Ro);
-    auto Rr_lit  = Lit::isa<u64>(Rr);
+    auto Rn_lit  = Lit::isa<u64>(Rn);
+    // The meta group states the total loop count Rn; report the reduction count Rr = Rn - Ro.
+    auto Rr_lit = Ro_lit && Rn_lit ? std::optional{*Rn_lit - *Ro_lit} : std::nullopt;
 
     std::string summary = std::format("(nis={}, Ro={}, Rr={}, map_out={}, maps=[", nis_lit ? std::to_string(*nis_lit) : "?", Ro_lit ? std::to_string(*Ro_lit) : "?", Rr_lit ? std::to_string(*Rr_lit) : "?", map_tag(map_out));
     if (nis_lit) {
@@ -156,12 +161,17 @@ std::string OpPatternAnalysis::summarize_map_reduce_aff(const App* mra) {
 
 OpPatternKind OpPatternAnalysis::analyze_map_reduce_aff(const App* mra) {
     auto callee = mra->callee()->as<App>();
-    auto [nis, meta, SoSr, TisRisSis, comb_init, map_out, maps] = callee->uncurry_args<7>();
+    auto [nis_nps, meta, shapes, in_tys, comb_init, map_out, maps_all] = callee->uncurry_args<7>();
+    (void)shapes, (void)in_tys, (void)comb_init;
+    auto [nis, nps]               = nis_nps->projs<2>();
+    auto [To, Tp, Ro, Rn, TSched] = meta->projs<5>();
+    auto [maps, post_maps]        = maps_all->projs<2>();
+    (void)nps, (void)To, (void)Tp, (void)TSched, (void)post_maps;
 
-    auto [To, Tp, Ro, Rr] = meta->projs<4>();
-    auto Rr_lit = Lit::isa<u64>(Rr);
-
-    if (!Rr_lit) return OpPatternKind::kOpaque;
+    auto Ro_lit = Lit::isa<u64>(Ro);
+    auto Rn_lit = Lit::isa<u64>(Rn);
+    if (!Ro_lit || !Rn_lit) return OpPatternKind::kOpaque;
+    auto Rr_lit = std::optional{*Rn_lit - *Ro_lit};
 
     bool is_elem_wise = true;
 

@@ -1,6 +1,7 @@
 set(MIM_PLUGINS
     affine
     autodiff
+    btensor
     buffer
     clos
     compile
@@ -12,7 +13,6 @@ set(MIM_PLUGINS
     ll
     ll_nvptx
     math
-    matrix
     mem
     nvptx
     opt
