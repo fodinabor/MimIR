@@ -9,6 +9,11 @@
     // Python `World.call` helper. `Defs` is implicitly constructible from a vector,
     // so the argument list arrives as a plain Python list.
     .def("annex", [](World& self, flags_t id) { return self.annex(id); }, nb::rv_policy::reference_internal)
+    // The single-Def overload comes first: a Def with __getitem__ also matches the
+    // Sequence[Def] caster of the list overload, which would misparse it.
+    .def("implicit_app", [](World& self, const Def* callee, const Def* arg) {
+        return self.implicit_app(callee, arg);
+    }, nb::rv_policy::reference_internal)
     .def("implicit_app", [](World& self, const Def* callee, std::vector<const Def*> args) {
         return self.implicit_app(callee, Defs(args));
     }, nb::rv_policy::reference_internal)
@@ -19,3 +24,6 @@
     .def("app", [](World& self, const Def* callee, std::vector<const Def*> args) {
         return self.app(callee, Defs(args));
     }, nb::rv_policy::reference_internal)
+    // `mut_sigma(size)` is a template over the level (defaulting to 0), so the
+    // generator skips it; expose the level-0 instantiation.
+    .def("mut_sigma", [](World& self, size_t size) { return self.mut_sigma(size); }, nb::rv_policy::reference_internal)

@@ -23,7 +23,7 @@ def test_custom_compile():
     
     compile_lam = world.mut_lam([], phase_t)
     compile_lam.set("_compile")
-    compile_lam.set_body(True, final_phase)
+    compile_lam.set([world.lit_tt(), final_phase])
 
     compile_lam.externalize()
     

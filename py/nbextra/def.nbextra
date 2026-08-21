@@ -9,7 +9,14 @@
 
 [class:Def]
     // Pythonic projection: def[i] -> proj(i); def[a, i] -> proj(a, i).
-    .def("__getitem__", [](const Def& self, nat_t i) { return self.proj(i); }, nb::rv_policy::reference_internal)
+    // The bounds check raises IndexError so iteration terminates: without it, Python's legacy
+    // __getitem__ iteration (e.g. inside a Sequence[Def] argument caster) calls def[0], def[1], ...
+    // forever, allocating an unbounded tuple.
+    .def("__getitem__", [](const Def& self, nat_t i) {
+        if (i >= self.num_projs()) throw nb::index_error();
+        return self.proj(i);
+    }, nb::rv_policy::reference_internal)
+    .def("__len__", [](const Def& self) { return self.num_projs(); })
     .def("__getitem__", [](const Def& self, std::pair<nat_t, nat_t> ai) { return self.proj(ai.first, ai.second); }, nb::rv_policy::reference_internal)
     // The name-setting Def::set overloads are template methods (template<bool Ow>),
     // so the generator skips them; expose the std::string instantiation used to
@@ -21,3 +28,7 @@
     // so they reach Python as a list (elements stay tied to `self`).
     .def("projs", [](const Def& self, nat_t a) { auto v = self.projs(a); return std::vector<const Def*>(v.begin(), v.end()); }, nb::rv_policy::reference_internal)
     .def("vars",  [](Def& self, nat_t a) { auto v = self.vars(a);  return std::vector<const Def*>(v.begin(), v.end()); }, nb::rv_policy::reference_internal)
+
+[class:Lit]
+    // Lit::get() is a template (skipped by the generator); expose the nat_t instantiation.
+    .def("get_nat", [](const Lit& self) { return self.get<nat_t>(); })
