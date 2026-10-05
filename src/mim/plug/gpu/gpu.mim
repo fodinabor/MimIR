@@ -264,18 +264,21 @@ lam %gpu.synced_scope (m1: %gpu.GlobalM, m3: %gpu.SharedM,
 /// ### %%gpu.Sched
 ///
 /// The type of a GPU schedule: a chooser among the kernel strategies, carried as an op's `sched` operand.
-/// * `generic`: one thread per output cell, folding the reduction dims sequentially.
+/// * `generic unroll`: one thread per output cell, folding the reduction dims sequentially.
 /// * `gemm (tile, m_lo, n_lo)`: a contraction tiled through shared memory.
 ///   Parallel dims `[0, m_lo)` are batch dims read by both inputs.
 ///   Dims `[m_lo, n_lo)` are read only by input 0, `[n_lo, Ro)` only by input 1, and every reduction dim by both.
-/// * `conv thr`: input 1's reduction slice is cached in shared memory per thread block.
+/// * `conv (thr, unroll)`: input 1's reduction slice is cached in shared memory per thread block.
 ///   The parallel dim `thr`, which input 1 does not read, runs across the block's threads.
-let %gpu.Sched = [N: *] → [generic: [] → N, gemm: [tile m_lo n_lo: Nat] → N, conv: [thr: Nat] → N] → N;
+/// `unroll` names the number of trailing reduction dims run as straight-line code instead of loops.
+let %gpu.Sched = [N: *] → [generic: [unroll: Nat] → N, gemm: [tile m_lo n_lo: Nat] → N, conv: [thr unroll: Nat] → N] → N;
 
-lam %gpu.sched_generic (N: *) (generic: [] → N, gemm: [Nat, Nat, Nat] → N, conv: Nat → N): N = generic ();
-lam %gpu.sched_gemm (tile m_lo n_lo: Nat) (N: *) (generic: [] → N, gemm: [Nat, Nat, Nat] → N, conv: Nat → N): N =
+lam %gpu.sched_generic (unroll: Nat) (N: *) (generic: Nat → N, gemm: [Nat, Nat, Nat] → N, conv: [Nat, Nat] → N): N =
+    generic unroll;
+lam %gpu.sched_gemm (tile m_lo n_lo: Nat) (N: *) (generic: Nat → N, gemm: [Nat, Nat, Nat] → N, conv: [Nat, Nat] → N): N =
     gemm (tile, m_lo, n_lo);
-lam %gpu.sched_conv (thr: Nat) (N: *) (generic: [] → N, gemm: [Nat, Nat, Nat] → N, conv: Nat → N): N = conv thr;
+lam %gpu.sched_conv (thr unroll: Nat) (N: *) (generic: Nat → N, gemm: [Nat, Nat, Nat] → N, conv: [Nat, Nat] → N): N =
+    conv (thr, unroll);
 ///
 /// ### Selectors
 ///
@@ -293,16 +296,22 @@ lam %gpu.dot_schedule (ro rn: Nat, Sr: «rn; Nat», m_lo n_lo: Nat): %gpu.Sched 
         let e = extent (rn, Sr) (lo, hi);
         %core.bit2.and_ 2 (%core.ncmp.l (lo, hi), %core.ncmp.e (%core.nat.mul (%core.nat.div (e, tile), tile), e));
     let ok = %core.bit2.and_ 2 (fits (m_lo, n_lo), %core.bit2.and_ 2 (fits (n_lo, ro), fits (ro, rn)));
-    (%gpu.sched_generic, %gpu.sched_gemm (tile, m_lo, n_lo))#ok;
+    (%gpu.sched_generic 0, %gpu.sched_gemm (tile, m_lo, n_lo))#ok;
 
 /// The convolution schedule for the loop domain `Sr` with `ro` output dims, `thr` being the output width.
 /// It caches the filter per thread block unless the block would exceed 1024 threads.
 /// A cooperative filter load of more than 8 rounds (a narrow output under a large filter) takes the generic kernel.
-lam %gpu.conv_schedule (ro rn: Nat, Sr: «rn; Nat», thr: Nat): %gpu.Sched =
+/// Either kernel unrolls the trailing `unroll` reduction dims.
+lam %gpu.conv_schedule (ro rn: Nat, Sr: «rn; Nat», thr unroll: Nat): %gpu.Sched =
     let ni     = Sr#(%core.idx rn 0 thr);
     let rounds = %core.nat.div (%core.nat.sub (%core.nat.add (extent (rn, Sr) (ro, rn), ni), 1), ni);
     let ok     = %core.bit2.and_ 2 (%core.ncmp.le (ni, 1024), %core.ncmp.le (rounds, 8));
-    (%gpu.sched_generic, %gpu.sched_conv thr)#ok;
+    (%gpu.sched_generic unroll, %gpu.sched_conv (thr, unroll))#ok;
+
+/// A CPU schedule (%%btensor.mk_sched) runs the `generic` kernel with the same trailing reduction dims unrolled.
+/// A `vdim` naming a reduction dim makes `unroll` a jam width (see %%btensor.mr_nest), so nothing is unrolled then.
+lam %gpu.cpu_sched (ro rn: Nat, L: *) (generic: Nat → L) (vdim unroll: Nat): L =
+    generic ((unroll, 0)#(%core.bit2.and_ 2 (%core.ncmp.le (ro, vdim), %core.ncmp.l (vdim, rn))));
 ///
 /// ### Kernel Builders
 ///
@@ -350,8 +359,34 @@ lam seq_nest (rn: Nat, Sr: «rn; Nat») (A: *) (lo hi: Nat)
     let ds = ‹i: k; %core.nat.add (lo, %core.bitcast Nat i)›;
     %vec.fold.r @(Cn [«rn; I64», %gpu.GlobalM, A, Cn [%gpu.GlobalM, A]], Nat) @k wrap (ds, inner);
 
+/// Like `seq_nest`, but every dim in `[lo, hi)` is unrolled: `inner` is chained once per point of the dim's extent.
+lam unroll_nest (rn: Nat, Sr: «rn; Nat») (A: *) (lo hi: Nat)
+                (inner: Cn [«rn; I64», %gpu.GlobalM, A, Cn [%gpu.GlobalM, A]])
+              : Cn [«rn; I64», %gpu.GlobalM, A, Cn [%gpu.GlobalM, A]] =
+    lam wrap (d: Nat, w: Cn [«rn; I64», %gpu.GlobalM, A, Cn [%gpu.GlobalM, A]])
+           : Cn [«rn; I64», %gpu.GlobalM, A, Cn [%gpu.GlobalM, A]] =
+        con level (iv: «rn; I64», m: %gpu.GlobalM, acc: A, k: Cn [%gpu.GlobalM, A]) =
+            lam step (i: Nat, kk: Cn [%gpu.GlobalM, A]): Cn [%gpu.GlobalM, A] =
+                con at (m2: %gpu.GlobalM, a2: A) =
+                    w (‹j: rn; %core.select (%core.ncmp.e (%core.bitcast Nat j, d), %core.bitcast I64 i, iv#j)›, m2, a2, kk);
+                at;
+            let t = Sr#(%core.idx rn 0 d);
+            (%vec.fold.r @(Cn [%gpu.GlobalM, A], Nat) @t step (‹i: t; %core.bitcast Nat i›, k)) (m, acc);
+        level;
+    let k  = %core.nat.sub (hi, lo);
+    let ds = ‹i: k; %core.nat.add (lo, %core.bitcast Nat i)›;
+    %vec.fold.r @(Cn [«rn; I64», %gpu.GlobalM, A, Cn [%gpu.GlobalM, A]], Nat) @k wrap (ds, inner);
+
+/// The reduction nest over the dims `[ro, rn)` of `Sr`: loops, except for the trailing `unroll` dims.
+lam red_nest (rn ro: Nat, Sr: «rn; Nat») (A: *) (unroll: Nat)
+             (inner: Cn [«rn; I64», %gpu.GlobalM, A, Cn [%gpu.GlobalM, A]])
+           : Cn [«rn; I64», %gpu.GlobalM, A, Cn [%gpu.GlobalM, A]] =
+    let u_lo = %core.nat.sub (rn, unroll);
+    let u_lo = (ro, u_lo)#(%core.ncmp.le (ro, u_lo));
+    seq_nest (rn, Sr) A (ro, u_lo) (unroll_nest (rn, Sr) A (u_lo, rn) inner);
+
 /// The `generic` kernel: the flat thread id is decomposed into the output coordinates.
-lam generic_kernel (rn ro: Nat, Sr: «rn; Nat», To: *, n: Nat, Ts: «n; *»)
+lam generic_kernel (rn ro: Nat, Sr: «rn; Nat», To: *, n: Nat, Ts: «n; *») (unroll: Nat)
                    (init: To,
                     cell: Fn [%gpu.GlobalM, «i: n; Ts#i», To, «rn; I64»] → [%gpu.GlobalM, To],
                     wb:   Fn [%gpu.GlobalM, «i: n; Ts#i», To, «rn; I64»] → %gpu.GlobalM)
@@ -373,7 +408,7 @@ lam generic_kernel (rn ro: Nat, Sr: «rn; Nat», To: *, n: Nat, Ts: «n; *»)
                 con folded (g2: %gpu.GlobalM, v: To) =
                     ret g2 = wb $ (g2, args, v, iv);
                     return (g2, s, c, l);
-                (seq_nest (rn, Sr) To (ro, rn) at) (iv, g, init, folded);
+                (red_nest (rn, ro, Sr) To unroll at) (iv, g, init, folded);
         end;
     %gpu.launch @(n, Ts) (ng, ni, %gpu.default_stream, ff, ()) kernel;
 
@@ -447,7 +482,7 @@ lam gemm_kernel (rn ro: Nat, Sr: «rn; Nat», To: *, n: Nat, Ts: «n; *», T0 T1
 /// The `conv` kernel: the grid covers every parallel dim but `thr`, which runs across the block's threads.
 /// The block first loads input 1's reduction slice into shared memory, padded to whole rounds to skip bounds checks.
 /// Each thread then folds its reduction, reading input 0 from global and input 1 from shared memory.
-lam conv_kernel (rn ro: Nat, Sr: «rn; Nat», To: *, n: Nat, Ts: «n; *», T0 T1: *) (thr: Nat)
+lam conv_kernel (rn ro: Nat, Sr: «rn; Nat», To: *, n: Nat, Ts: «n; *», T0 T1: *) (thr unroll: Nat)
                 (init: To,
                  rd0:  Fn [%gpu.GlobalM, «i: n; Ts#i», «rn; I64»] → [%gpu.GlobalM, T0],
                  rd1:  Fn [%gpu.GlobalM, «i: n; Ts#i», «rn; I64»] → [%gpu.GlobalM, T1],
@@ -480,7 +515,7 @@ lam conv_kernel (rn ro: Nat, Sr: «rn; Nat», To: *, n: Nat, Ts: «n; *», T0 T1
                 con folded (g2: %gpu.GlobalM, v: To) =
                     ret g2 = wb $ (g2, args, v, iv);
                     return (g2, s, c, l);
-                (seq_nest (rn, Sr) To (ro, rn) at) (iv, g, init, folded);
+                (red_nest (rn, ro, Sr) To unroll at) (iv, g, init, folded);
         end;
     %gpu.launch @(n, Ts) (ng, ni, %gpu.default_stream, tt, «cache; T1») kernel;
 ///
@@ -497,11 +532,12 @@ lam %gpu.mr_kernel (rn ro: Nat, Sr: «rn; Nat», To: *, n: Nat, Ts: «n; *», T0
                     rd1:  Fn [%gpu.GlobalM, «i: n; Ts#i», «rn; I64»] → [%gpu.GlobalM, T1],
                     comb: Fn [%gpu.GlobalM, To, [T0, T1]] → [%gpu.GlobalM, To],
                     wb:   Fn [%gpu.GlobalM, «i: n; Ts#i», To, «rn; I64»] → %gpu.GlobalM)
-                 : [[] → %gpu.Launch (n, Ts), [Nat, Nat, Nat] → %gpu.Launch (n, Ts), Nat → %gpu.Launch (n, Ts)] =
-    lam generic (u: []): %gpu.Launch (n, Ts) = generic_kernel (rn, ro, Sr, To, n, Ts) (init, cell, wb);
+                 : [Nat → %gpu.Launch (n, Ts), [Nat, Nat, Nat] → %gpu.Launch (n, Ts), [Nat, Nat] → %gpu.Launch (n, Ts)] =
+    lam generic (unroll: Nat): %gpu.Launch (n, Ts) = generic_kernel (rn, ro, Sr, To, n, Ts) unroll (init, cell, wb);
     lam gemm (tile m_lo n_lo: Nat): %gpu.Launch (n, Ts) =
         gemm_kernel (rn, ro, Sr, To, n, Ts, T0, T1) (tile, m_lo, n_lo) (init, rd0, rd1, comb, wb);
-    lam conv (thr: Nat): %gpu.Launch (n, Ts) = conv_kernel (rn, ro, Sr, To, n, Ts, T0, T1) thr (init, rd0, rd1, comb, wb);
+    lam conv (thr unroll: Nat): %gpu.Launch (n, Ts) =
+        conv_kernel (rn, ro, Sr, To, n, Ts, T0, T1) (thr, unroll) (init, rd0, rd1, comb, wb);
     (generic, gemm, conv);
 
 /// %%gpu.mr_kernel for an op whose inputs no longer fit the two-input strategies (e.g. after fusion).
@@ -510,10 +546,10 @@ lam %gpu.mr_kernel_generic (rn ro: Nat, Sr: «rn; Nat», To: *, n: Nat, Ts: «n;
                            (init: To,
                             cell: Fn [%gpu.GlobalM, «i: n; Ts#i», To, «rn; I64»] → [%gpu.GlobalM, To],
                             wb:   Fn [%gpu.GlobalM, «i: n; Ts#i», To, «rn; I64»] → %gpu.GlobalM)
-                         : [[] → %gpu.Launch (n, Ts), [Nat, Nat, Nat] → %gpu.Launch (n, Ts), Nat → %gpu.Launch (n, Ts)] =
-    lam generic (u: []): %gpu.Launch (n, Ts) = generic_kernel (rn, ro, Sr, To, n, Ts) (init, cell, wb);
-    lam gemm (tile m_lo n_lo: Nat): %gpu.Launch (n, Ts) = generic ();
-    lam conv (thr: Nat): %gpu.Launch (n, Ts) = generic ();
+                         : [Nat → %gpu.Launch (n, Ts), [Nat, Nat, Nat] → %gpu.Launch (n, Ts), [Nat, Nat] → %gpu.Launch (n, Ts)] =
+    lam generic (unroll: Nat): %gpu.Launch (n, Ts) = generic_kernel (rn, ro, Sr, To, n, Ts) unroll (init, cell, wb);
+    lam gemm (tile m_lo n_lo: Nat): %gpu.Launch (n, Ts) = generic 0;
+    lam conv (thr unroll: Nat): %gpu.Launch (n, Ts) = generic unroll;
     (generic, gemm, conv);
 ///
 /// ## Phases

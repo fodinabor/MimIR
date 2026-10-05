@@ -497,7 +497,7 @@ std::optional<const Def*> LowerMapReduce::lower_map_reduce_chained(const App* ap
 
         // The op's schedule is a chooser among %gpu.mr_kernel's strategies, selected in the frontend;
         // an op scheduled for the CPU (or one no longer fitting the two-input strategies) gets the
-        // generic kernel.
+        // generic kernel, via %gpu.cpu_sched for the former.
         auto pieces    = Pieces(w, ro, rr, Ro, Sr, So, in_desc, post_desc, acc_out,
                                 rebuild_lam_global_mem(comb_lam, To, w.sym("combGlobal")),
                                 rebuild_lam_global_mem(post_lam, Tp, w.sym("postGlobal")), Tp);
@@ -514,9 +514,9 @@ std::optional<const Def*> LowerMapReduce::lower_map_reduce_chained(const App* ap
             auto dom = mk->type()->as<Pi>()->dom();
             handlers = w.app(mk, {init, pieces.cell(dom->proj(3, 1)->as<Pi>()), pieces.wb(dom->proj(3, 2)->as<Pi>())});
         }
-        auto launch = gpu_sched ? w.app(w.app(sched, w.app(w.annex<gpu::Launch>(), {n, Ts})), handlers)
-                                : w.app(handlers->proj(3, 0), w.tuple());
-        launch      = w.app(launch, kernel_args);
+        auto L      = w.app(w.annex<gpu::Launch>(), {n, Ts});
+        auto chosen = gpu_sched ? handlers : w.app(w.app(w.annex<gpu::cpu_sched>(), {Ro, Rn, L}), handlers->proj(3, 0));
+        auto launch = w.app(w.app(w.app(sched, L), chosen), kernel_args);
 
         auto global_ty                     = w.annex<gpu::GlobalM>();
         auto const_ty                      = w.annex<gpu::ConstM>();
